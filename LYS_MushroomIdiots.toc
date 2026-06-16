@@ -1,0 +1,291 @@
+-- Rotmire (Sporefall) fixate debuffs are PRIVATE AURAS and cannot be read by
+-- C_UnitAuras.GetPlayerAuraBySpellID. So this addon no longer tries to detect
+-- them. Instead it draws a static legend you place next to Blizzard's private
+-- aura icon, mapping each add to the raid marker your team uses:
+--     Shroomling add  ->  Square
+--     Fungling  add   ->  Diamond
+
+local SHROOMLING = 1221639
+local FUNGLING   = 1299508
+
+-- Raid target marker indices for the SetTexture(... :GetRaidTargetTexture style).
+-- We use the standard raid target icon atlas: 1=Star 2=Circle 3=Diamond
+-- 4=Triangle 5=Moon 6=Square 7=Cross 8=Skull
+local MARKER_SQUARE  = 6   -- Shroomling
+local MARKER_DIAMOND = 3   -- Fungling
+
+local MARKER_TEX = "Interface\\TargetingFrame\\UI-RaidTargetingIcon_%d"
+
+-- Defaults; overwritten by saved settings on load.
+local defaults = {
+    scale    = 48,   -- single size knob: drives icon size; font derived from it
+    point    = "CENTER",
+    relPoint = "CENTER",
+    x        = 0,
+    y        = 200,
+    locked   = false,
+}
+
+-- ============================================================
+-- Display frame
+-- ============================================================
+local f = CreateFrame("Frame", "LYSMushroomIdiotsFrame", UIParent)
+f:SetSize(220, 80)
+f:SetMovable(true)
+f:EnableMouse(false)            -- only clickable while unlocked
+f:RegisterForDrag("LeftButton")
+
+-- A faint backdrop only shown while unlocked, so there's something to grab.
+f.bg = f:CreateTexture(nil, "BACKGROUND")
+f.bg:SetAllPoints(f)
+f.bg:SetColorTexture(0.1, 0.6, 0.1, 0.25)
+f.bg:Hide()
+
+-- ------------------------------------------------------------
+-- Two legend rows. Each row: [add icon]  [add label]  ->  [marker icon]
+-- ------------------------------------------------------------
+local function MakeRow(parent)
+    local row = {}
+    row.frame = CreateFrame("Frame", nil, parent)
+
+    row.addIcon = row.frame:CreateTexture(nil, "ARTWORK")
+    row.addIcon:SetPoint("LEFT", row.frame, "LEFT", 0, 0)
+
+    row.label = row.frame:CreateFontString(nil, "OVERLAY")
+    row.label:SetFont(STANDARD_TEXT_FONT, 24, "OUTLINE")  -- set a font up front; resized in ApplyRow
+    row.label:SetPoint("LEFT", row.addIcon, "RIGHT", 8, 0)
+    row.label:SetJustifyH("LEFT")
+
+    row.marker = row.frame:CreateTexture(nil, "ARTWORK")
+    row.marker:SetPoint("LEFT", row.label, "RIGHT", 8, 0)
+
+    return row
+end
+
+f.shroom  = MakeRow(f)
+f.fungling = MakeRow(f)
+
+-- Bundled art for each add. The private-aura debuffs don't expose usable spell
+-- icons to addons, so we ship our own textures (64x64 TGA in the Textures dir).
+local ADDON_PATH    = "Interface\\AddOns\\LYS_MushroomIdiots\\Textures\\"
+local SHROOM_TEX    = ADDON_PATH .. "shroomling"
+local FUNGLING_TEX  = ADDON_PATH .. "fungling"
+
+-- ============================================================
+-- Layout / styling
+-- ============================================================
+local function ApplyRow(row, addTexture, labelText, labelColor, markerIndex)
+    local db = LYSMushroomIdiotsDB
+    local icon = db.scale
+    local font = math.max(10, math.floor(db.scale * 0.5 + 0.5))  -- text ~half the icon height
+
+    row.addIcon:SetTexture(addTexture)
+    row.addIcon:SetSize(icon, icon)
+
+    row.label:SetFont(STANDARD_TEXT_FONT, font, "OUTLINE")
+    row.label:SetText(labelText)
+    row.label:SetTextColor(unpack(labelColor))
+
+    row.marker:SetTexture(MARKER_TEX:format(markerIndex))
+    row.marker:SetSize(icon, icon)
+
+    -- size the row to its contents
+    local w = icon + 8 + row.label:GetStringWidth() + 8 + icon
+    local h = math.max(icon, row.label:GetStringHeight())
+    row.frame:SetSize(w, h)
+end
+
+local function ResizeToContent()
+    local db = LYSMushroomIdiotsDB
+    local pad = 10
+    local gap = 6
+    local w = math.max(f.shroom.frame:GetWidth(), f.fungling.frame:GetWidth())
+    local rowH = f.shroom.frame:GetHeight()
+    local h = rowH * 2 + gap
+    f:SetSize(math.max(w + pad * 2, 80), h + pad * 2)
+
+    -- stack the two rows, left-aligned
+    f.shroom.frame:ClearAllPoints()
+    f.shroom.frame:SetPoint("TOPLEFT", f, "TOPLEFT", pad, -pad)
+    f.fungling.frame:ClearAllPoints()
+    f.fungling.frame:SetPoint("TOPLEFT", f.shroom.frame, "BOTTOMLEFT", 0, -gap)
+end
+
+local function ApplyAll()
+    ApplyRow(f.shroom,  SHROOM_TEX,   "Shroomling", {0.6, 1, 0.6}, MARKER_SQUARE)
+    ApplyRow(f.fungling, FUNGLING_TEX, "Fungling",   {0.7, 0.5, 1}, MARKER_DIAMOND)
+    ResizeToContent()
+end
+
+local function ApplyPosition()
+    f:ClearAllPoints()
+    f:SetPoint(LYSMushroomIdiotsDB.point, UIParent, LYSMushroomIdiotsDB.relPoint,
+               LYSMushroomIdiotsDB.x, LYSMushroomIdiotsDB.y)
+end
+
+local function ApplyLock()
+    if LYSMushroomIdiotsDB.locked then
+        f:EnableMouse(false)
+        f.bg:Hide()
+    else
+        f:EnableMouse(true)
+        f.bg:Show()
+    end
+end
+
+-- The raid this legend is for. We match on instance NAME (from GetInstanceInfo)
+-- rather than a numeric ID, so it keeps working without a verified map ID.
+local TARGET_INSTANCE = "Sporefall"
+
+local function InTargetInstance()
+    local name, instanceType = GetInstanceInfo()
+    return instanceType == "raid" and name == TARGET_INSTANCE
+end
+
+-- Decide whether the legend should be on screen right now.
+-- Shown when: inside Sporefall, OR unlocked (so you can place it anywhere).
+local function UpdateVisibility()
+    if InTargetInstance() or not LYSMushroomIdiotsDB.locked then
+        f:Show()
+    else
+        f:Hide()
+    end
+end
+
+f:SetScript("OnDragStart", function(self) if not LYSMushroomIdiotsDB.locked then self:StartMoving() end end)
+f:SetScript("OnDragStop", function(self)
+    self:StopMovingOrSizing()
+    local point, _, relPoint, x, y = self:GetPoint()
+    LYSMushroomIdiotsDB.point, LYSMushroomIdiotsDB.relPoint = point, relPoint
+    LYSMushroomIdiotsDB.x, LYSMushroomIdiotsDB.y = x, y
+end)
+
+-- ============================================================
+-- Options panel (Settings API, canvas layout)
+-- ============================================================
+local function BuildOptions()
+    local panel = CreateFrame("Frame")
+    panel.name = "LYS - Mushroom Idiots"
+
+    local title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", 16, -16)
+    title:SetText("LYS - Mushroom Idiots")
+
+    local desc = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    desc:SetPoint("TOPLEFT", 16, -40)
+    desc:SetWidth(360)
+    desc:SetJustifyH("LEFT")
+    desc:SetText("Static legend to place next to the private aura icon.\nShroomling = Square, Fungling = Diamond.")
+
+    -- Single size scale (drives icon size; text scales with it)
+    local scaleSlider = CreateFrame("Slider", "LYSMushroomIdiotsScaleSlider", panel, "OptionsSliderTemplate")
+    scaleSlider:SetPoint("TOPLEFT", 20, -100)
+    scaleSlider:SetMinMaxValues(16, 96)
+    scaleSlider:SetValueStep(1)
+    scaleSlider:SetObeyStepOnDrag(true)
+    scaleSlider:SetWidth(260)
+    _G[scaleSlider:GetName() .. "Low"]:SetText("16")
+    _G[scaleSlider:GetName() .. "High"]:SetText("96")
+    _G[scaleSlider:GetName() .. "Text"]:SetText("Size")
+    scaleSlider:SetScript("OnValueChanged", function(_, value)
+        value = math.floor(value + 0.5)
+        LYSMushroomIdiotsDB.scale = value
+        _G[scaleSlider:GetName() .. "Text"]:SetText("Size: " .. value)
+        ApplyAll()
+    end)
+
+    -- Lock checkbox
+    local lock = CreateFrame("CheckButton", "LYSMushroomIdiotsLockCheck", panel, "InterfaceOptionsCheckButtonTemplate")
+    lock:SetPoint("TOPLEFT", 20, -150)
+    lock.Text:SetText("Lock position (uncheck to drag the legend)")
+    lock:SetScript("OnClick", function(self)
+        LYSMushroomIdiotsDB.locked = self:GetChecked()
+        ApplyLock()
+        UpdateVisibility()
+    end)
+
+    -- Reset button
+    local reset = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    reset:SetSize(160, 24)
+    reset:SetPoint("TOPLEFT", 20, -190)
+    reset:SetText("Reset to defaults")
+    reset:SetScript("OnClick", function()
+        for k, v in pairs(defaults) do LYSMushroomIdiotsDB[k] = v end
+        ApplyAll(); ApplyPosition(); ApplyLock(); UpdateVisibility()
+        scaleSlider:SetValue(LYSMushroomIdiotsDB.scale)
+        lock:SetChecked(LYSMushroomIdiotsDB.locked)
+    end)
+
+    panel:SetScript("OnShow", function()
+        scaleSlider:SetValue(LYSMushroomIdiotsDB.scale)
+        lock:SetChecked(LYSMushroomIdiotsDB.locked)
+    end)
+
+    local category = Settings.RegisterCanvasLayoutCategory(panel, panel.name)
+    Settings.RegisterAddOnCategory(category)
+    return category
+end
+
+-- ============================================================
+-- Init
+-- ============================================================
+local init = CreateFrame("Frame")
+init:RegisterEvent("PLAYER_LOGIN")
+init:RegisterEvent("PLAYER_ENTERING_WORLD")
+init:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+init:SetScript("OnEvent", function(_, event)
+    if event ~= "PLAYER_LOGIN" then
+        -- Zone changed (or finished loading): just re-evaluate visibility.
+        if LYSMushroomIdiotsDB then UpdateVisibility() end
+        return
+    end
+    local ok, err = pcall(function()
+        LYSMushroomIdiotsDB = LYSMushroomIdiotsDB or {}
+        -- Migrate from the old two-knob layout: prefer the previous iconSize as the
+        -- new single scale, then drop the obsolete keys.
+        if LYSMushroomIdiotsDB.scale == nil and LYSMushroomIdiotsDB.iconSize ~= nil then
+            LYSMushroomIdiotsDB.scale = LYSMushroomIdiotsDB.iconSize
+        end
+        LYSMushroomIdiotsDB.fontSize = nil
+        LYSMushroomIdiotsDB.iconSize = nil
+        for k, v in pairs(defaults) do
+            if LYSMushroomIdiotsDB[k] == nil then LYSMushroomIdiotsDB[k] = v end
+        end
+        ApplyAll()
+        ApplyPosition()
+        ApplyLock()
+        UpdateVisibility()
+        LYSMushroomIdiots_Category = BuildOptions()
+    end)
+    if not ok then
+        print("|cffff4444LYS Mushroom Idiots init error:|r " .. tostring(err))
+    else
+        print("|cff66ff66LYS Mushroom Idiots:|r legend ready. Type /mush to open options.")
+    end
+end)
+
+-- ============================================================
+-- Slash commands
+--   /mush          -> open options
+--   /mush lock     -> lock position
+--   /mush unlock   -> unlock to drag
+-- ============================================================
+SLASH_MUSH1 = "/mush"
+SLASH_MUSH2 = "/mushroom"
+SlashCmdList["MUSH"] = function(msg)
+    msg = msg:lower():gsub("%s+", "")
+    if msg == "lock" then
+        LYSMushroomIdiotsDB.locked = true
+        ApplyLock()
+        UpdateVisibility()
+        print("|cff66ff66LYS Mushroom Idiots:|r locked." ..
+              (InTargetInstance() and "" or " (hidden until you enter Sporefall)"))
+    elseif msg == "unlock" then
+        LYSMushroomIdiotsDB.locked = false
+        ApplyLock()
+        UpdateVisibility()
+        print("|cff66ff66LYS Mushroom Idiots:|r unlocked - drag the legend, then /mush lock.")
+    else
+        Settings.OpenToCategory(LYSMushroomIdiots_Category:GetID())
+    end
+end

@@ -1,8 +1,0 @@
-## Interface: 120005
-## Title: LYS - Mushroom Idiots
-## Notes: Static legend mapping Rotmire fixate adds to raid markers (Shroomling = Square, Fungling = Diamond). Auto-shows only inside the Sporefall raid.
-## Author: Sean
-## Version: 1.3
-## SavedVariables: LYSMushroomIdiotsDB
-
-LYS_MushroomIdiots.lua

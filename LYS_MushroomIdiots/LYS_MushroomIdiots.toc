@@ -1,0 +1,8 @@
+## Interface: 120005
+## Title: LYS - Mushroom Idiots
+## Notes: Displays SHROOMLING / FUNGLING text based on the Rotmire fixate debuff you currently have.
+## Author: Sean
+## Version: 0.6
+## SavedVariables: LYSMushroomIdiotsDB
+
+LYS_MushroomIdiots.lua
